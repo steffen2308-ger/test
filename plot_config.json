@@ -1,0 +1,36 @@
+{
+  "plots": [
+    {
+      "title": "Sinus",
+      "function": "sin",
+      "color": "#1f77b4",
+      "linestyle": "-",
+      "linewidth": 2,
+      "marker": ""
+    },
+    {
+      "title": "Cosinus",
+      "function": "cos",
+      "color": "#ff7f0e",
+      "linestyle": "--",
+      "linewidth": 2,
+      "marker": ""
+    },
+    {
+      "title": "Exponential",
+      "function": "exp",
+      "color": "#2ca02c",
+      "linestyle": "-.",
+      "linewidth": 2,
+      "marker": "o"
+    },
+    {
+      "title": "Quadratisch",
+      "function": "quadratic",
+      "color": "#d62728",
+      "linestyle": ":",
+      "linewidth": 2,
+      "marker": "s"
+    }
+  ]
+}
