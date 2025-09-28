@@ -119,6 +119,8 @@ class FrogJumpGame:
     def run(self) -> None:
         """Steuert den gesamten Spielablauf."""
 
+        self._show_game_rules()
+
         while self.running:
             outcome, data = self.play_level()
             if outcome == "quit":
@@ -143,6 +145,8 @@ class FrogJumpGame:
 
         grid_size = INITIAL_GRID_SIZE + self.level - 1
         lifetime = INITIAL_LIFETIME * (LIFETIME_FACTOR ** (self.level - 1))
+
+        self._show_level_briefing(grid_size, lifetime)
 
         metrics = self._grid_metrics(grid_size)
         level_start_ticks = pygame.time.get_ticks()
@@ -446,6 +450,51 @@ class FrogJumpGame:
         )
         label = self.small_font.render(instruction, True, TEXT_COLOR)
         self.screen.blit(label, (20, WINDOW_HEIGHT - 30))
+
+    def _show_game_rules(self) -> None:
+        """Zeigt vor Spielbeginn die wichtigsten Regeln an."""
+
+        lines = [
+            "Springe von Blatt zu Blatt und erreiche das rote Ziel oben rechts.",
+            "Blätter schrumpfen mit der Zeit – halte den Frosch in Bewegung.",
+            "Nutze Pfeiltasten/WASD oder ziehe mit der Maus, um zu springen.",
+            "Wenn ein Blatt verschwindet, fällt der Frosch ins Wasser und das Level endet.",
+        ]
+        self._show_overlay(
+            "Spielregeln",
+            lines,
+            "Start mit Enter, Leertaste oder Mausklick",
+        )
+
+    def _show_level_briefing(self, grid_size: int, lifetime: float) -> None:
+        """Erläutert vor jedem Level das Punktesystem."""
+
+        points_start = self._format_points(math.sqrt(grid_size * grid_size))
+        points_jump = self._format_points(JUMP_SCORE)
+        points_survival = self._format_points(SURVIVAL_SCORE_PER_SECOND)
+        points_diamond = self._format_points(DIAMOND_SCORE)
+
+        lines = [
+            f"Level {self.level}: Spielfeld {grid_size}x{grid_size}, Blätter leben ca. {lifetime:.1f}s.",
+            f"Du startest mit {points_start} Punkten in diesem Level.",
+            f"Jeder Sprung bringt +{points_jump} Punkte.",
+            f"Überleben bringt +{points_survival} Punkte pro Sekunde.",
+            f"Jeder Diamant liefert +{points_diamond} Punkte.",
+        ]
+
+        self._show_overlay(
+            "Punkteübersicht",
+            lines,
+            "Level starten mit Enter, Leertaste oder Mausklick",
+        )
+
+    def _format_points(self, value: float) -> str:
+        """Formatiert Punktwerte ohne überflüssige Nachkommastellen."""
+
+        rounded = round(value)
+        if math.isclose(value, rounded, rel_tol=1e-9, abs_tol=1e-9):
+            return str(int(rounded))
+        return f"{value:.1f}"
 
     def _cell_rect(
         self,
