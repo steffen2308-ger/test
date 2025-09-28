@@ -5,11 +5,17 @@ from __future__ import annotations
 import math
 import random
 import sys
+import threading
 from array import array
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 import pygame
+
+try:
+    import pyttsx3  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    pyttsx3 = None  # type: ignore
 
 
 # Fenster- und Layoutparameter
@@ -108,6 +114,8 @@ class FrogJumpGame:
         self.diamond_sound: Optional[pygame.mixer.Sound] = None
         self._init_sounds()
 
+        self.voice_settings = self._init_voice_settings()
+
         self.running = True
         self.level = 1
         self.total_points = 0.0
@@ -182,6 +190,8 @@ class FrogJumpGame:
                 metrics.cell_size,
                 delta_seconds,
                 (start_position, goal_position),
+                (frog_position[0], frog_position[1]),
+                grid_size,
             )
 
             outcome = self._handle_events(frog_position, grid_size)
@@ -329,11 +339,17 @@ class FrogJumpGame:
         cell_size: float,
         delta_seconds: float,
         required_positions: Sequence[Tuple[int, int]],
+        frog_position: Tuple[int, int],
+        grid_size: int,
     ) -> None:
         """Aktualisiert vorhandene Blätter und lässt neue entstehen."""
 
         spawn_probability = 1.0 if lifetime <= 0 else 1.0 - math.exp(-delta_seconds / lifetime)
         required = set(required_positions)
+
+        self._ensure_escape_leaf(
+            leaves, now_ticks, lifetime, cell_size, frog_position, grid_size
+        )
 
         drop_triggered = False
         for row in range(len(leaves)):
@@ -351,6 +367,55 @@ class FrogJumpGame:
                         leaves[row][col] = self._generate_leaf(now_ticks, lifetime, cell_size)
         if drop_triggered:
             self._play_sound(self.drop_sound)
+
+    def _ensure_escape_leaf(
+        self,
+        leaves: List[List[Optional[Leaf]]],
+        now_ticks: int,
+        lifetime: float,
+        cell_size: float,
+        frog_position: Tuple[int, int],
+        grid_size: int,
+    ) -> None:
+        """Stellt sicher, dass kurz vor Ablauf des aktuellen Blatts ein Ausweg existiert."""
+
+        if not (0 <= frog_position[0] < grid_size and 0 <= frog_position[1] < grid_size):
+            return
+
+        frog_leaf = leaves[frog_position[1]][frog_position[0]]
+        if frog_leaf is None:
+            return
+
+        elapsed = (now_ticks - frog_leaf.creation_ticks) / 1000.0
+        time_remaining = frog_leaf.lifetime - elapsed
+        if time_remaining > 0.1:
+            return
+
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        safe_exists = False
+        candidate_positions: List[Tuple[int, int]] = []
+
+        for dx, dy in directions:
+            nx = frog_position[0] + dx
+            ny = frog_position[1] + dy
+            if not (0 <= nx < grid_size and 0 <= ny < grid_size):
+                continue
+            neighbour = leaves[ny][nx]
+            if neighbour is not None:
+                if neighbour.radius(now_ticks) > LEAF_MIN_RADIUS:
+                    safe_exists = True
+                    break
+                candidate_positions.append((nx, ny))
+            else:
+                candidate_positions.append((nx, ny))
+
+        if safe_exists or not candidate_positions:
+            return
+
+        spawn_position = random.choice(candidate_positions)
+        leaves[spawn_position[1]][spawn_position[0]] = self._generate_leaf(
+            now_ticks, lifetime, cell_size
+        )
 
     def _grid_metrics(self, grid_size: int) -> "GridMetrics":
         """Berechnet Zellgröße und Offsets für die Darstellung."""
@@ -460,6 +525,7 @@ class FrogJumpGame:
             "Nutze Pfeiltasten/WASD oder ziehe mit der Maus, um zu springen.",
             "Wenn ein Blatt verschwindet, fällt der Frosch ins Wasser und das Level endet.",
         ]
+        self._speak_with_darth_voice(lines)
         self._show_overlay(
             "Spielregeln",
             lines,
@@ -712,6 +778,65 @@ class FrogJumpGame:
             ]
         )
 
+    def _init_voice_settings(self) -> Optional[dict]:
+        """Bereitet Einstellungen für die Sprachsynthese im Darth-Vader-Stil vor."""
+
+        if pyttsx3 is None:
+            return None
+
+        try:
+            engine = pyttsx3.init()
+        except Exception:
+            return None
+
+        try:
+            voice_id = self._select_darth_voice(engine)
+            settings = {
+                "voice_id": voice_id,
+                "rate": 110,
+                "volume": 1.0,
+                "pitch": 35,
+            }
+            engine.stop()
+            return settings
+        except Exception:
+            return None
+
+    def _select_darth_voice(self, engine: "pyttsx3.Engine") -> Optional[str]:
+        """Wählt eine tiefe Stimme aus und bevorzugt deutschsprachige Varianten."""
+
+        try:
+            voices = engine.getProperty("voices")
+        except Exception:
+            return None
+
+        if not voices:
+            return None
+
+        fallback = voices[0].id
+
+        keyword_orders = [
+            ("vader", "dark"),
+            ("darth",),
+            ("bass", "baritone"),
+            ("male", "mann"),
+        ]
+
+        for keywords in keyword_orders:
+            for voice in voices:
+                descriptor = f"{voice.id} {voice.name}".lower()
+                if all(keyword in descriptor for keyword in keywords):
+                    return voice.id
+
+        german_preferences = ("de+", "german", "deu")
+        for preference in german_preferences:
+            for voice in voices:
+                descriptor = f"{voice.id} {voice.name}".lower()
+                if preference in descriptor and ("m3" in descriptor or "male" in descriptor):
+                    return voice.id
+
+        return fallback
+
     def _create_tone(
         self, tones: Sequence[Tuple[float, int, float]]
     ) -> Optional[pygame.mixer.Sound]:
@@ -749,6 +874,50 @@ class FrogJumpGame:
                 sound.play()
             except pygame.error:
                 pass
+
+    def _speak_with_darth_voice(self, lines: Sequence[str]) -> None:
+        """Liest Text mithilfe von Sprachausgabe in tiefer Darth-Vader-Stimme vor."""
+
+        if pyttsx3 is None or self.voice_settings is None:
+            return
+
+        text = " ".join(line.strip() for line in lines if line.strip())
+        if not text:
+            return
+
+        settings = dict(self.voice_settings)
+
+        def _run_voice() -> None:
+            try:
+                engine = pyttsx3.init()
+                voice_id = settings.get("voice_id")
+                if voice_id:
+                    try:
+                        engine.setProperty("voice", voice_id)
+                    except Exception:
+                        pass
+                try:
+                    engine.setProperty("rate", settings.get("rate", 110))
+                except Exception:
+                    pass
+                try:
+                    engine.setProperty("volume", settings.get("volume", 1.0))
+                except Exception:
+                    pass
+                try:
+                    engine.setProperty("pitch", settings.get("pitch", 35))
+                except Exception:
+                    pass
+
+                intro = "Ich bin dein Spielleiter. *schweres Atmen*."
+                engine.say(intro)
+                engine.say(text)
+                engine.runAndWait()
+                engine.stop()
+            except Exception:
+                pass
+
+        threading.Thread(target=_run_voice, daemon=True).start()
 
 
 @dataclass
