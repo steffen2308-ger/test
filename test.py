@@ -36,6 +36,13 @@ FROG_BELLY_COLOR = (204, 232, 182)
 FROG_EYE_COLOR = (250, 250, 250)
 FROG_PUPIL_COLOR = (20, 40, 20)
 FROG_SCALE = 0.2
+DIAMOND_COLOR = (210, 42, 42)
+
+# Punktesystem
+DIAMOND_SCORE = 10.0
+JUMP_SCORE = 0.1
+SURVIVAL_SCORE_PER_SECOND = 0.5
+DIAMOND_SPAWN_PROBABILITY = 0.05
 
 # Spielparameter
 INITIAL_GRID_SIZE = 4
@@ -53,6 +60,7 @@ class Leaf:
     creation_ticks: int
     lifetime: float
     base_radius: float
+    has_diamond: bool = False
 
     def radius(self, now_ticks: int) -> float:
         elapsed_seconds = max(0.0, (now_ticks - self.creation_ticks) / 1000.0)
@@ -97,6 +105,7 @@ class FrogJumpGame:
         self.drop_sound: Optional[pygame.mixer.Sound] = None
         self.fanfare_sound: Optional[pygame.mixer.Sound] = None
         self.drown_sound: Optional[pygame.mixer.Sound] = None
+        self.diamond_sound: Optional[pygame.mixer.Sound] = None
         self._init_sounds()
 
         self.running = True
@@ -105,6 +114,7 @@ class FrogJumpGame:
         self.results: List[LevelResult] = []
         self.failure: Optional[FailureInfo] = None
         self.drag_start: Optional[Tuple[int, int]] = None
+        self.current_level_points = 0.0
 
     def run(self) -> None:
         """Steuert den gesamten Spielablauf."""
@@ -149,7 +159,7 @@ class FrogJumpGame:
             goal_position,
         )
         frog_position = [start_position[0], start_position[1]]  # (x, y) mit y = 0 unterste Reihe
-        level_points = math.sqrt(grid_size * grid_size)
+        self.current_level_points = math.sqrt(grid_size * grid_size)
         last_update_ticks = level_start_ticks
 
 
@@ -158,6 +168,8 @@ class FrogJumpGame:
             elapsed_seconds = (now_ticks - level_start_ticks) / 1000.0
             delta_seconds = max(0.0, (now_ticks - last_update_ticks) / 1000.0)
             last_update_ticks = now_ticks
+            if delta_seconds > 0:
+                self.current_level_points += SURVIVAL_SCORE_PER_SECOND * delta_seconds
 
             self._update_leaves(
                 leaves,
@@ -179,10 +191,17 @@ class FrogJumpGame:
                 self._play_sound(self.drown_sound)
                 return "drowned", FailureInfo(self.level, grid_size, time_seconds)
 
+            if current_leaf.has_diamond:
+                current_leaf.has_diamond = False
+                self.current_level_points += DIAMOND_SCORE
+                self._play_sound(self.diamond_sound)
+
             if tuple(frog_position) == goal_position:
                 time_seconds = (now_ticks - level_start_ticks) / 1000.0
                 self._play_sound(self.fanfare_sound)
-                return "completed", LevelResult(self.level, grid_size, time_seconds, level_points)
+                return "completed", LevelResult(
+                    self.level, grid_size, time_seconds, self.current_level_points
+                )
 
             self._draw_level(
                 leaves,
@@ -191,7 +210,7 @@ class FrogJumpGame:
                 frog_position,
                 goal_position,
                 lifetime,
-                level_points,
+                self.current_level_points,
                 elapsed_seconds,
             )
             self.clock.tick(MAX_FPS)
@@ -258,6 +277,7 @@ class FrogJumpGame:
         if 0 <= new_x < grid_size and 0 <= new_y < grid_size:
             frog_position[0] = new_x
             frog_position[1] = new_y
+            self.current_level_points += JUMP_SCORE
             self._play_sound(self.jump_sound)
 
     def _create_leaves(
@@ -294,7 +314,8 @@ class FrogJumpGame:
         factor = random.uniform(*LEAF_RADIUS_RANGE)
         max_radius = cell_size * 0.48
         radius = min(cell_size * factor, max_radius)
-        return Leaf(creation_ticks, lifetime, radius)
+        has_diamond = random.random() < DIAMOND_SPAWN_PROBABILITY
+        return Leaf(creation_ticks, lifetime, radius, has_diamond)
 
     def _update_leaves(
         self,
@@ -366,6 +387,16 @@ class FrogJumpGame:
                         ratio = radius / leaf.base_radius if leaf.base_radius > 0 else 0.0
                         color = self._blend_color(LEAF_DANGER_COLOR, LEAF_COLOR, ratio)
                         pygame.draw.circle(self.screen, color, rect.center, int(radius))
+                        if leaf.has_diamond:
+                            diamond_size = max(4, int(radius * 0.6))
+                            cx, cy = rect.center
+                            points = [
+                                (cx, cy - diamond_size),
+                                (cx + diamond_size, cy),
+                                (cx, cy + diamond_size),
+                                (cx - diamond_size, cy),
+                            ]
+                            pygame.draw.polygon(self.screen, DIAMOND_COLOR, points)
 
                 if (col, row) == goal_position:
                     pygame.draw.rect(self.screen, GOAL_COLOR, rect, 3)
@@ -608,9 +639,12 @@ class FrogJumpGame:
         self.drop_sound = self._create_tone([(1400, 30, 0.5), (900, 80, 0.4)])
         self.fanfare_sound = self._create_tone(
             [
-                (523, 160, 0.55),
-                (659, 160, 0.55),
-                (784, 240, 0.6),
+                (392, 120, 0.55),
+                (523, 160, 0.6),
+                (659, 160, 0.65),
+                (784, 200, 0.7),
+                (988, 220, 0.75),
+                (1175, 260, 0.75),
             ]
         )
         self.drown_sound = self._create_tone(
@@ -619,6 +653,13 @@ class FrogJumpGame:
                 (160, 140, 0.55),
                 (110, 200, 0.5),
                 (80, 260, 0.45),
+            ]
+        )
+        self.diamond_sound = self._create_tone(
+            [
+                (660, 70, 0.55),
+                (990, 90, 0.6),
+                (1320, 160, 0.75),
             ]
         )
 
