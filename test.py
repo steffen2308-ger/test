@@ -124,6 +124,7 @@ class FrogJumpGame:
         metrics = self._grid_metrics(grid_size)
         level_start_ticks = pygame.time.get_ticks()
 
+
         start_position = (0, 0)
         goal_position = (grid_size - 1, grid_size - 1)
         leaves = self._create_leaves(
@@ -137,6 +138,7 @@ class FrogJumpGame:
         frog_position = [start_position[0], start_position[1]]  # (x, y) mit y = 0 unterste Reihe
         level_points = math.sqrt(grid_size * grid_size)
         last_update_ticks = level_start_ticks
+
 
         while self.running:
             now_ticks = pygame.time.get_ticks()
@@ -490,6 +492,7 @@ class FrogJumpGame:
         return tuple(
             int(start + (end - start) * clamped) for start, end in zip(start_color, end_color)
         )
+
 
 
 @dataclass
