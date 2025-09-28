@@ -124,21 +124,43 @@ class FrogJumpGame:
         metrics = self._grid_metrics(grid_size)
         level_start_ticks = pygame.time.get_ticks()
 
-        leaves = self._create_leaves(grid_size, lifetime, level_start_ticks, metrics.cell_size)
-        frog_position = [0, 0]  # (x, y) mit y = 0 entspricht unterer Reihe
+
+        start_position = (0, 0)
         goal_position = (grid_size - 1, grid_size - 1)
+        leaves = self._create_leaves(
+            grid_size,
+            lifetime,
+            level_start_ticks,
+            metrics.cell_size,
+            start_position,
+            goal_position,
+        )
+        frog_position = [start_position[0], start_position[1]]  # (x, y) mit y = 0 unterste Reihe
         level_points = math.sqrt(grid_size * grid_size)
+        last_update_ticks = level_start_ticks
+
 
         while self.running:
             now_ticks = pygame.time.get_ticks()
             elapsed_seconds = (now_ticks - level_start_ticks) / 1000.0
+            delta_seconds = max(0.0, (now_ticks - last_update_ticks) / 1000.0)
+            last_update_ticks = now_ticks
+
+            self._update_leaves(
+                leaves,
+                now_ticks,
+                lifetime,
+                metrics.cell_size,
+                delta_seconds,
+                (start_position, goal_position),
+            )
 
             outcome = self._handle_events(frog_position, grid_size)
             if outcome == "quit":
                 return "quit", None
 
             current_leaf = leaves[frog_position[1]][frog_position[0]]
-            if current_leaf.radius(now_ticks) <= LEAF_MIN_RADIUS:
+            if current_leaf is None or current_leaf.radius(now_ticks) <= LEAF_MIN_RADIUS:
                 # Frosch ertrinkt
                 time_seconds = (now_ticks - level_start_ticks) / 1000.0
                 return "drowned", FailureInfo(self.level, grid_size, time_seconds)
@@ -228,18 +250,61 @@ class FrogJumpGame:
         lifetime: float,
         creation_ticks: int,
         cell_size: float,
-    ) -> List[List[Leaf]]:
-        """Erzeugt die Blattmatrix mit zufälligen Startgrößen."""
+        start_position: Tuple[int, int],
+        goal_position: Tuple[int, int],
+    ) -> List[List[Optional[Leaf]]]:
+        """Erzeugt die Blattmatrix mit zufälligen Startgrößen und Lücken."""
 
-        leaves: List[List[Leaf]] = []
+        required_positions = {start_position, goal_position}
+        leaves: List[List[Optional[Leaf]]] = []
         for row in range(grid_size):
-            row_leaves: List[Leaf] = []
-            for _col in range(grid_size):
-                factor = random.uniform(*LEAF_RADIUS_RANGE)
-                radius = cell_size * factor
-                row_leaves.append(Leaf(creation_ticks, lifetime, radius))
+            row_leaves: List[Optional[Leaf]] = []
+            for col in range(grid_size):
+                position = (col, row)
+                if position in required_positions or random.random() < 0.5:
+                    row_leaves.append(
+                        self._generate_leaf(creation_ticks, lifetime, cell_size)
+                    )
+                else:
+                    row_leaves.append(None)
             leaves.append(row_leaves)
         return leaves
+
+    def _generate_leaf(
+        self, creation_ticks: int, lifetime: float, cell_size: float
+    ) -> Leaf:
+        """Erzeugt ein neues Blatt mit zufälligem Basisradius."""
+
+        factor = random.uniform(*LEAF_RADIUS_RANGE)
+        radius = cell_size * factor
+        return Leaf(creation_ticks, lifetime, radius)
+
+    def _update_leaves(
+        self,
+        leaves: List[List[Optional[Leaf]]],
+        now_ticks: int,
+        lifetime: float,
+        cell_size: float,
+        delta_seconds: float,
+        required_positions: Sequence[Tuple[int, int]],
+    ) -> None:
+        """Aktualisiert vorhandene Blätter und lässt neue entstehen."""
+
+        spawn_probability = 1.0 if lifetime <= 0 else 1.0 - math.exp(-delta_seconds / lifetime)
+        required = set(required_positions)
+
+        for row in range(len(leaves)):
+            for col in range(len(leaves[row])):
+                leaf = leaves[row][col]
+                if leaf is not None:
+                    if leaf.radius(now_ticks) <= 0.0:
+                        leaves[row][col] = None
+                else:
+                    position = (col, row)
+                    if position in required:
+                        leaves[row][col] = self._generate_leaf(now_ticks, lifetime, cell_size)
+                    elif random.random() < spawn_probability:
+                        leaves[row][col] = self._generate_leaf(now_ticks, lifetime, cell_size)
 
     def _grid_metrics(self, grid_size: int) -> "GridMetrics":
         """Berechnet Zellgröße und Offsets für die Darstellung."""
@@ -253,7 +318,7 @@ class FrogJumpGame:
 
     def _draw_level(
         self,
-        leaves: Sequence[Sequence[Leaf]],
+        leaves: Sequence[Sequence[Optional[Leaf]]],
         grid_size: int,
         metrics: "GridMetrics",
         frog_position: Sequence[int],
@@ -266,6 +331,7 @@ class FrogJumpGame:
 
         self.screen.fill(BACKGROUND_COLOR)
 
+        now_ticks = pygame.time.get_ticks()
         for row in range(grid_size):
             for col in range(grid_size):
                 rect = self._cell_rect(col, row, grid_size, metrics)
@@ -273,14 +339,12 @@ class FrogJumpGame:
                 pygame.draw.rect(self.screen, GRID_LINE_COLOR, rect, 1)
 
                 leaf = leaves[row][col]
-                now_ticks = pygame.time.get_ticks()
-                radius = leaf.radius(now_ticks)
-                if radius > 0:
-                    ratio = radius / leaf.base_radius if leaf.base_radius > 0 else 0.0
-                    color = self._blend_color(LEAF_DANGER_COLOR, LEAF_COLOR, ratio)
-                    pygame.draw.circle(self.screen, color, rect.center, int(radius))
-                else:
-                    pygame.draw.circle(self.screen, LEAF_DEAD_COLOR, rect.center, int(min(rect.width, rect.height) / 4))
+                if leaf is not None:
+                    radius = leaf.radius(now_ticks)
+                    if radius > 0:
+                        ratio = radius / leaf.base_radius if leaf.base_radius > 0 else 0.0
+                        color = self._blend_color(LEAF_DANGER_COLOR, LEAF_COLOR, ratio)
+                        pygame.draw.circle(self.screen, color, rect.center, int(radius))
 
                 if (col, row) == goal_position:
                     pygame.draw.rect(self.screen, GOAL_COLOR, rect, 3)
@@ -428,6 +492,7 @@ class FrogJumpGame:
         return tuple(
             int(start + (end - start) * clamped) for start, end in zip(start_color, end_color)
         )
+
 
 
 @dataclass
