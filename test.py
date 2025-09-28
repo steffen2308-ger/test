@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 import sys
+from array import array
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
@@ -17,6 +18,7 @@ WINDOW_HEIGHT = 900
 HUD_HEIGHT = 110
 GRID_MARGIN = 40
 MAX_FPS = 60
+SOUND_SAMPLE_RATE = 44100
 
 # Farben
 BACKGROUND_COLOR = (18, 32, 64)
@@ -28,7 +30,11 @@ LEAF_COLOR = (18, 140, 62)
 LEAF_DANGER_COLOR = (222, 184, 54)
 LEAF_DEAD_COLOR = (80, 80, 80)
 GOAL_COLOR = (200, 60, 60)
-FROG_COLOR = (240, 240, 120)
+FROG_BODY_COLOR = (62, 168, 74)
+FROG_LIMB_COLOR = (48, 130, 60)
+FROG_BELLY_COLOR = (204, 232, 182)
+FROG_EYE_COLOR = (250, 250, 250)
+FROG_PUPIL_COLOR = (20, 40, 20)
 
 # Spielparameter
 INITIAL_GRID_SIZE = 4
@@ -85,6 +91,11 @@ class FrogJumpGame:
         self.font = pygame.font.SysFont("arial", 24)
         self.small_font = pygame.font.SysFont("arial", 20)
         self.big_font = pygame.font.SysFont("arial", 36, bold=True)
+
+        self.jump_sound: Optional[pygame.mixer.Sound] = None
+        self.drop_sound: Optional[pygame.mixer.Sound] = None
+        self.fanfare_sound: Optional[pygame.mixer.Sound] = None
+        self._init_sounds()
 
         self.running = True
         self.level = 1
@@ -167,6 +178,7 @@ class FrogJumpGame:
 
             if tuple(frog_position) == goal_position:
                 time_seconds = (now_ticks - level_start_ticks) / 1000.0
+                self._play_sound(self.fanfare_sound)
                 return "completed", LevelResult(self.level, grid_size, time_seconds, level_points)
 
             self._draw_level(
@@ -243,6 +255,7 @@ class FrogJumpGame:
         if 0 <= new_x < grid_size and 0 <= new_y < grid_size:
             frog_position[0] = new_x
             frog_position[1] = new_y
+            self._play_sound(self.jump_sound)
 
     def _create_leaves(
         self,
@@ -276,7 +289,8 @@ class FrogJumpGame:
         """Erzeugt ein neues Blatt mit zufälligem Basisradius."""
 
         factor = random.uniform(*LEAF_RADIUS_RANGE)
-        radius = cell_size * factor
+        max_radius = cell_size * 0.48
+        radius = min(cell_size * factor, max_radius)
         return Leaf(creation_ticks, lifetime, radius)
 
     def _update_leaves(
@@ -293,11 +307,13 @@ class FrogJumpGame:
         spawn_probability = 1.0 if lifetime <= 0 else 1.0 - math.exp(-delta_seconds / lifetime)
         required = set(required_positions)
 
+        drop_triggered = False
         for row in range(len(leaves)):
             for col in range(len(leaves[row])):
                 leaf = leaves[row][col]
                 if leaf is not None:
                     if leaf.radius(now_ticks) <= 0.0:
+                        drop_triggered = True
                         leaves[row][col] = None
                 else:
                     position = (col, row)
@@ -305,6 +321,8 @@ class FrogJumpGame:
                         leaves[row][col] = self._generate_leaf(now_ticks, lifetime, cell_size)
                     elif random.random() < spawn_probability:
                         leaves[row][col] = self._generate_leaf(now_ticks, lifetime, cell_size)
+        if drop_triggered:
+            self._play_sound(self.drop_sound)
 
     def _grid_metrics(self, grid_size: int) -> "GridMetrics":
         """Berechnet Zellgröße und Offsets für die Darstellung."""
@@ -350,7 +368,7 @@ class FrogJumpGame:
                     pygame.draw.rect(self.screen, GOAL_COLOR, rect, 3)
 
         frog_rect = self._cell_rect(frog_position[0], frog_position[1], grid_size, metrics)
-        pygame.draw.circle(self.screen, FROG_COLOR, frog_rect.center, int(metrics.cell_size * 0.3))
+        self._draw_frog(frog_rect)
 
         self._draw_hud(grid_size, lifetime, level_points, elapsed_seconds)
         self._draw_instructions()
@@ -493,6 +511,138 @@ class FrogJumpGame:
             int(start + (end - start) * clamped) for start, end in zip(start_color, end_color)
         )
 
+    def _draw_frog(self, cell_rect: pygame.Rect) -> None:
+        """Zeichnet einen stilisierten Frosch innerhalb der gegebenen Zelle."""
+
+        body_rect = cell_rect.inflate(-cell_rect.width * 0.25, -cell_rect.height * 0.3)
+        head_rect = pygame.Rect(0, 0, int(cell_rect.width * 0.6), int(cell_rect.height * 0.45))
+        head_rect.center = (
+            cell_rect.centerx,
+            int(cell_rect.centery - cell_rect.height * 0.2),
+        )
+        belly_rect = body_rect.inflate(-body_rect.width * 0.45, -body_rect.height * 0.35)
+
+        pygame.draw.ellipse(self.screen, FROG_BODY_COLOR, body_rect)
+        pygame.draw.ellipse(self.screen, FROG_BODY_COLOR, head_rect)
+        pygame.draw.ellipse(self.screen, FROG_BELLY_COLOR, belly_rect)
+
+        leg_width = max(2, int(cell_rect.width * 0.1))
+        leg_length = int(cell_rect.height * 0.35)
+        back_leg_y = int(cell_rect.bottom - cell_rect.height * 0.2)
+        front_leg_y = int(cell_rect.centery + cell_rect.height * 0.15)
+        pygame.draw.line(
+            self.screen,
+            FROG_LIMB_COLOR,
+            (int(cell_rect.centerx - cell_rect.width * 0.25), front_leg_y),
+            (int(cell_rect.centerx - cell_rect.width * 0.35), front_leg_y + leg_length // 2),
+            leg_width,
+        )
+        pygame.draw.line(
+            self.screen,
+            FROG_LIMB_COLOR,
+            (int(cell_rect.centerx + cell_rect.width * 0.25), front_leg_y),
+            (int(cell_rect.centerx + cell_rect.width * 0.35), front_leg_y + leg_length // 2),
+            leg_width,
+        )
+        pygame.draw.line(
+            self.screen,
+            FROG_LIMB_COLOR,
+            (int(cell_rect.centerx - cell_rect.width * 0.35), back_leg_y),
+            (int(cell_rect.centerx - cell_rect.width * 0.2), back_leg_y + leg_length // 3),
+            leg_width,
+        )
+        pygame.draw.line(
+            self.screen,
+            FROG_LIMB_COLOR,
+            (int(cell_rect.centerx + cell_rect.width * 0.35), back_leg_y),
+            (int(cell_rect.centerx + cell_rect.width * 0.2), back_leg_y + leg_length // 3),
+            leg_width,
+        )
+
+        eye_radius = max(2, int(cell_rect.width * 0.08))
+        eye_offset_x = int(cell_rect.width * 0.18)
+        eye_offset_y = int(cell_rect.height * 0.33)
+        left_eye_center = (cell_rect.centerx - eye_offset_x, cell_rect.centery - eye_offset_y)
+        right_eye_center = (cell_rect.centerx + eye_offset_x, cell_rect.centery - eye_offset_y)
+        pygame.draw.circle(self.screen, FROG_EYE_COLOR, left_eye_center, eye_radius)
+        pygame.draw.circle(self.screen, FROG_EYE_COLOR, right_eye_center, eye_radius)
+
+        pupil_radius = max(1, int(eye_radius * 0.5))
+        pygame.draw.circle(self.screen, FROG_PUPIL_COLOR, left_eye_center, pupil_radius)
+        pygame.draw.circle(self.screen, FROG_PUPIL_COLOR, right_eye_center, pupil_radius)
+
+        mouth_width = int(cell_rect.width * 0.35)
+        mouth_y = int(cell_rect.centery - cell_rect.height * 0.02)
+        pygame.draw.arc(
+            self.screen,
+            FROG_PUPIL_COLOR,
+            pygame.Rect(
+                cell_rect.centerx - mouth_width,
+                mouth_y,
+                mouth_width * 2,
+                int(cell_rect.height * 0.25),
+            ),
+            math.radians(10),
+            math.radians(170),
+            max(1, int(cell_rect.height * 0.03)),
+        )
+
+    def _init_sounds(self) -> None:
+        """Initialisiert einfache Synthesizer-Sounds für Spielereignisse."""
+
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=SOUND_SAMPLE_RATE, size=-16, channels=1)
+        except pygame.error:
+            return
+
+        self.jump_sound = self._create_tone([(780, 60, 0.5), (880, 40, 0.45)])
+        self.drop_sound = self._create_tone([(1400, 30, 0.5), (900, 80, 0.4)])
+        self.fanfare_sound = self._create_tone(
+            [
+                (523, 160, 0.55),
+                (659, 160, 0.55),
+                (784, 240, 0.6),
+            ]
+        )
+
+    def _create_tone(
+        self, tones: Sequence[Tuple[float, int, float]]
+    ) -> Optional[pygame.mixer.Sound]:
+        """Erzeugt einen Ton aus Frequenz-, Dauer- und Lautstärkeangaben."""
+
+        if not tones:
+            return None
+
+        samples = array("h")
+        sample_rate = SOUND_SAMPLE_RATE
+
+        for frequency, duration_ms, volume in tones:
+            clamped_volume = max(0.0, min(1.0, volume))
+            amplitude = int(32767 * clamped_volume)
+            sample_count = max(1, int(sample_rate * (duration_ms / 1000.0)))
+            angular_frequency = 2.0 * math.pi * max(0.0, frequency)
+            for index in range(sample_count):
+                value = (
+                    math.sin(angular_frequency * index / sample_rate)
+                    if frequency > 0
+                    else 0.0
+                )
+                samples.append(int(amplitude * value))
+
+        try:
+            return pygame.mixer.Sound(buffer=samples.tobytes())
+        except pygame.error:
+            return None
+
+    def _play_sound(self, sound: Optional[pygame.mixer.Sound]) -> None:
+        """Spielt einen Sound ab, sofern verfügbar."""
+
+        if sound is not None:
+            try:
+                sound.play()
+            except pygame.error:
+                pass
 
 
 @dataclass
