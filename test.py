@@ -35,6 +35,7 @@ FROG_LIMB_COLOR = (48, 130, 60)
 FROG_BELLY_COLOR = (204, 232, 182)
 FROG_EYE_COLOR = (250, 250, 250)
 FROG_PUPIL_COLOR = (20, 40, 20)
+FROG_SCALE = 0.2
 
 # Spielparameter
 INITIAL_GRID_SIZE = 4
@@ -95,6 +96,7 @@ class FrogJumpGame:
         self.jump_sound: Optional[pygame.mixer.Sound] = None
         self.drop_sound: Optional[pygame.mixer.Sound] = None
         self.fanfare_sound: Optional[pygame.mixer.Sound] = None
+        self.drown_sound: Optional[pygame.mixer.Sound] = None
         self._init_sounds()
 
         self.running = True
@@ -174,6 +176,7 @@ class FrogJumpGame:
             if current_leaf is None or current_leaf.radius(now_ticks) <= LEAF_MIN_RADIUS:
                 # Frosch ertrinkt
                 time_seconds = (now_ticks - level_start_ticks) / 1000.0
+                self._play_sound(self.drown_sound)
                 return "drowned", FailureInfo(self.level, grid_size, time_seconds)
 
             if tuple(frog_position) == goal_position:
@@ -368,6 +371,11 @@ class FrogJumpGame:
                     pygame.draw.rect(self.screen, GOAL_COLOR, rect, 3)
 
         frog_rect = self._cell_rect(frog_position[0], frog_position[1], grid_size, metrics)
+        if FROG_SCALE != 1.0:
+            frog_rect = frog_rect.inflate(
+                -frog_rect.width * (1.0 - FROG_SCALE),
+                -frog_rect.height * (1.0 - FROG_SCALE),
+            )
         self._draw_frog(frog_rect)
 
         self._draw_hud(grid_size, lifetime, level_points, elapsed_seconds)
@@ -603,6 +611,14 @@ class FrogJumpGame:
                 (523, 160, 0.55),
                 (659, 160, 0.55),
                 (784, 240, 0.6),
+            ]
+        )
+        self.drown_sound = self._create_tone(
+            [
+                (220, 120, 0.6),
+                (160, 140, 0.55),
+                (110, 200, 0.5),
+                (80, 260, 0.45),
             ]
         )
 
