@@ -8,7 +8,7 @@ import sys
 import threading
 from array import array
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import pygame
 
@@ -43,6 +43,7 @@ FROG_EYE_COLOR = (250, 250, 250)
 FROG_PUPIL_COLOR = (20, 40, 20)
 FROG_SCALE = 0.2
 DIAMOND_COLOR = (210, 42, 42)
+CURRENT_POINTS_COLOR = (255, 215, 0)
 
 # Punktesystem
 DIAMOND_SCORE = 10.0
@@ -124,27 +125,46 @@ class FrogJumpGame:
         self.drag_start: Optional[Tuple[int, int]] = None
         self.current_level_points = 0.0
 
+    def _reset_progress(self) -> None:
+        """Setzt spielbezogene Fortschrittsdaten für einen Neustart zurück."""
+
+        self.level = 1
+        self.total_points = 0.0
+        self.results.clear()
+        self.failure = None
+        self.drag_start = None
+        self.current_level_points = 0.0
+
     def run(self) -> None:
         """Steuert den gesamten Spielablauf."""
 
-        self._show_game_rules()
-
         while self.running:
-            outcome, data = self.play_level()
-            if outcome == "quit":
-                break
-            if outcome == "completed" and isinstance(data, LevelResult):
-                self.results.append(data)
-                self.total_points += data.points
-                self.draw_level_summary(data)
-                self.level += 1
-                continue
-            if outcome == "drowned" and isinstance(data, FailureInfo):
-                self.failure = data
+            self._reset_progress()
+            self._show_game_rules()
+
+            while self.running:
+                outcome, data = self.play_level()
+                if outcome == "quit":
+                    self.running = False
+                    break
+                if outcome == "completed" and isinstance(data, LevelResult):
+                    self.results.append(data)
+                    self.total_points += data.points
+                    self.draw_level_summary(data)
+                    self.level += 1
+                    continue
+                if outcome == "drowned" and isinstance(data, FailureInfo):
+                    self.failure = data
+                    break
+
+            if not self.running:
                 break
 
-        if self.running:
-            self.draw_final_summary()
+            choice = self.draw_final_summary()
+            if choice == "restart":
+                continue
+
+            break
 
         pygame.quit()
 
@@ -496,15 +516,15 @@ class FrogJumpGame:
         pygame.draw.rect(self.screen, HUD_COLOR, hud_rect)
 
         texts = [
-            f"Level: {self.level} ({grid_size}x{grid_size})",
-            f"Gesamtpunkte: {self.total_points:.1f}",
-            f"Punkte in diesem Level: {level_points:.1f}",
-            f"Levelzeit: {elapsed_seconds:.1f}s",
-            f"Blattlebensdauer: {lifetime:.1f}s",
+            (f"Level: {self.level} ({grid_size}x{grid_size})", TEXT_COLOR),
+            (f"Gesamtpunkte: {self.total_points:.1f}", TEXT_COLOR),
+            (f"Punkte in diesem Level: {level_points:.1f}", CURRENT_POINTS_COLOR),
+            (f"Levelzeit: {elapsed_seconds:.1f}s", TEXT_COLOR),
+            (f"Blattlebensdauer: {lifetime:.1f}s", TEXT_COLOR),
         ]
 
-        for index, text in enumerate(texts):
-            label = self.font.render(text, True, TEXT_COLOR)
+        for index, (text, color) in enumerate(texts):
+            label = self.font.render(text, True, color)
             self.screen.blit(label, (20, 10 + index * 20))
 
     def _draw_instructions(self) -> None:
@@ -525,11 +545,11 @@ class FrogJumpGame:
             "Nutze Pfeiltasten/WASD oder ziehe mit der Maus, um zu springen.",
             "Wenn ein Blatt verschwindet, fällt der Frosch ins Wasser und das Level endet.",
         ]
-        self._speak_with_darth_voice(lines)
         self._show_overlay(
             "Spielregeln",
             lines,
             "Start mit Enter, Leertaste oder Mausklick",
+            speak=True,
         )
 
     def _show_level_briefing(self, grid_size: int, lifetime: float) -> None:
@@ -552,6 +572,7 @@ class FrogJumpGame:
             "Punkteübersicht",
             lines,
             "Level starten mit Enter, Leertaste oder Mausklick",
+            speak=True,
         )
 
     def _format_points(self, value: float) -> str:
@@ -585,10 +606,15 @@ class FrogJumpGame:
             f"Punkte in diesem Level: {result.points:.1f}",
             f"Gesamtpunkte: {self.total_points:.1f}",
         ]
-        self._show_overlay(title, lines, "Weiter mit Enter, Leertaste oder Mausklick")
+        self._show_overlay(
+            title,
+            lines,
+            "Weiter mit Enter, Leertaste oder Mausklick",
+            speak=True,
+        )
 
-    def draw_final_summary(self) -> None:
-        """Zeigt die Übersicht am Ende des Spiels."""
+    def draw_final_summary(self) -> Optional[str]:
+        """Zeigt die Übersicht am Ende des Spiels und liefert eine Auswahl zurück."""
 
         total_time = math.fsum(result.time_seconds for result in self.results)
 
@@ -611,10 +637,44 @@ class FrogJumpGame:
                 f"Spielende in Level {self.failure.level} nach {self.failure.time_seconds:.1f} Sekunden."
             )
 
-        self._show_overlay("Spiel beendet", lines, "Fenster schließen oder Taste drücken, um zu beenden")
+        prompt = "Drücke R für Neustart oder Q/Esc zum Beenden"
 
-    def _show_overlay(self, title: str, lines: Sequence[str], prompt: str) -> None:
+        def _handle_event(event: pygame.event.Event) -> Optional[str]:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    return "restart"
+                if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                    self.running = False
+                    return "quit"
+            return None
+
+        result = self._show_overlay(
+            "Spiel beendet",
+            lines,
+            prompt,
+            speak=True,
+            event_handler=_handle_event,
+        )
+
+        if result == "continue":
+            self.running = False
+            return "quit"
+
+        return result
+
+    def _show_overlay(
+        self,
+        title: str,
+        lines: Sequence[str],
+        prompt: str,
+        *,
+        speak: bool = False,
+        event_handler: Optional[Callable[[pygame.event.Event], Optional[str]]] = None,
+    ) -> Optional[str]:
         """Blendet ein halbtransparentes Overlay mit Text ein und wartet auf Eingabe."""
+
+        if speak:
+            self._speak_with_darth_voice(lines)
 
         while self.running:
             self._draw_overlay_contents(title, lines, prompt)
@@ -623,13 +683,21 @@ class FrogJumpGame:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
-                    return
+                    return "quit"
+
+                if event_handler is not None:
+                    result = event_handler(event)
+                    if result is not None:
+                        return result
+
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    return
+                    return "continue"
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    return
+                    return "continue"
 
             self.clock.tick(30)
+
+        return None
 
     def _draw_overlay_contents(self, title: str, lines: Sequence[str], prompt: str) -> None:
         """Zeichnet den Inhalt des Overlays."""
