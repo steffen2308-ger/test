@@ -53,8 +53,8 @@ DIAMOND_SPAWN_PROBABILITY = 0.05
 
 # Spielparameter
 INITIAL_GRID_SIZE = 4
-INITIAL_LIFETIME = 10.0  # Sekunden
-LIFETIME_FACTOR = 0.9
+INITIAL_LIFETIME = 15.0  # Sekunden
+LIFETIME_FACTOR = 0.95
 LEAF_MIN_RADIUS = 6.0
 LEAF_RADIUS_RANGE = (0.3, 0.65)
 DRAG_THRESHOLD = 30
@@ -408,31 +408,46 @@ class FrogJumpGame:
 
         elapsed = (now_ticks - frog_leaf.creation_ticks) / 1000.0
         time_remaining = frog_leaf.lifetime - elapsed
-        if time_remaining > 0.1:
+        current_radius = frog_leaf.radius(now_ticks)
+        critical_time = max(0.75, frog_leaf.lifetime * 0.25)
+        critical_radius = max(LEAF_MIN_RADIUS * 1.5, frog_leaf.base_radius * 0.35)
+        if time_remaining > critical_time and current_radius > critical_radius:
             return
 
         directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
         safe_exists = False
-        candidate_positions: List[Tuple[int, int]] = []
+        candidate_options: List[Tuple[Tuple[int, int], float]] = []
 
         for dx, dy in directions:
             nx = frog_position[0] + dx
             ny = frog_position[1] + dy
             if not (0 <= nx < grid_size and 0 <= ny < grid_size):
                 continue
+
             neighbour = leaves[ny][nx]
             if neighbour is not None:
-                if neighbour.radius(now_ticks) > LEAF_MIN_RADIUS:
+                neighbour_radius = neighbour.radius(now_ticks)
+                if neighbour_radius > LEAF_MIN_RADIUS * 1.6:
                     safe_exists = True
                     break
-                candidate_positions.append((nx, ny))
+                weight = 2.0 if neighbour_radius <= LEAF_MIN_RADIUS else 1.2
+                candidate_options.append(((nx, ny), weight))
             else:
-                candidate_positions.append((nx, ny))
+                candidate_options.append(((nx, ny), 3.0))
 
-        if safe_exists or not candidate_positions:
+        if safe_exists or not candidate_options:
             return
 
-        spawn_position = random.choice(candidate_positions)
+        total_weight = sum(weight for _, weight in candidate_options)
+        threshold = random.random() * total_weight
+        cumulative = 0.0
+        spawn_position = candidate_options[0][0]
+        for position, weight in candidate_options:
+            cumulative += weight
+            if cumulative >= threshold:
+                spawn_position = position
+                break
+
         leaves[spawn_position[1]][spawn_position[0]] = self._generate_leaf(
             now_ticks, lifetime, cell_size
         )
@@ -946,44 +961,55 @@ class FrogJumpGame:
     def _speak_with_darth_voice(self, lines: Sequence[str]) -> None:
         """Liest Text mithilfe von Sprachausgabe in tiefer Darth-Vader-Stimme vor."""
 
-        if pyttsx3 is None or self.voice_settings is None:
+        if pyttsx3 is None:
             return
 
         text = " ".join(line.strip() for line in lines if line.strip())
         if not text:
             return
 
-        settings = dict(self.voice_settings)
+        settings = dict(self.voice_settings) if self.voice_settings else {}
 
         def _run_voice() -> None:
+            engine: Optional["pyttsx3.Engine"] = None
             try:
                 engine = pyttsx3.init()
                 voice_id = settings.get("voice_id")
+                if not voice_id:
+                    voice_id = self._select_darth_voice(engine)
                 if voice_id:
                     try:
                         engine.setProperty("voice", voice_id)
                     except Exception:
                         pass
-                try:
-                    engine.setProperty("rate", settings.get("rate", 110))
-                except Exception:
-                    pass
-                try:
-                    engine.setProperty("volume", settings.get("volume", 1.0))
-                except Exception:
-                    pass
-                try:
-                    engine.setProperty("pitch", settings.get("pitch", 35))
-                except Exception:
-                    pass
+                    if not settings.get("voice_id"):
+                        settings["voice_id"] = voice_id
+                        self.voice_settings = dict(settings)
+
+                for property_name, default in (
+                    ("rate", 110),
+                    ("volume", 1.0),
+                    ("pitch", 35),
+                ):
+                    try:
+                        engine.setProperty(
+                            property_name, settings.get(property_name, default)
+                        )
+                    except Exception:
+                        pass
 
                 intro = "Ich bin dein Spielleiter. *schweres Atmen*."
                 engine.say(intro)
                 engine.say(text)
                 engine.runAndWait()
-                engine.stop()
             except Exception:
                 pass
+            finally:
+                if engine is not None:
+                    try:
+                        engine.stop()
+                    except Exception:
+                        pass
 
         threading.Thread(target=_run_voice, daemon=True).start()
 
