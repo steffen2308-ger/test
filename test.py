@@ -41,6 +41,12 @@ FROG_LIMB_COLOR = (48, 130, 60)
 FROG_BELLY_COLOR = (204, 232, 182)
 FROG_EYE_COLOR = (250, 250, 250)
 FROG_PUPIL_COLOR = (20, 40, 20)
+TWISTED_FROG_BODY_COLOR = (180, 36, 36)
+TWISTED_FROG_LIMB_COLOR = (140, 20, 20)
+TWISTED_FROG_BELLY_COLOR = (230, 160, 160)
+TWISTED_FROG_EYE_COLOR = (255, 240, 240)
+TWISTED_FROG_PUPIL_COLOR = (40, 0, 0)
+TWISTED_FROG_HORN_COLOR = (240, 240, 240)
 FROG_SCALE = 0.2
 DIAMOND_COLOR = (210, 42, 42)
 CURRENT_POINTS_COLOR = (255, 215, 0)
@@ -57,7 +63,10 @@ INITIAL_LIFETIME = 15.0  # Sekunden
 LIFETIME_FACTOR = 0.95
 LEAF_MIN_RADIUS = 6.0
 LEAF_RADIUS_RANGE = (0.3, 0.65)
+LEAF_LIFETIME_VARIATION = 0.3
 DRAG_THRESHOLD = 30
+
+TWISTED_LEVELS = {4, 7, 13, 17, 39}
 
 
 @dataclass
@@ -135,6 +144,11 @@ class FrogJumpGame:
         self.drag_start = None
         self.current_level_points = 0.0
 
+    def _is_twisted_level(self) -> bool:
+        """Gibt an, ob das aktuelle Level mit vertauschter Steuerung gespielt wird."""
+
+        return self.level in TWISTED_LEVELS
+
     def run(self) -> None:
         """Steuert den gesamten Spielablauf."""
 
@@ -173,6 +187,9 @@ class FrogJumpGame:
 
         grid_size = INITIAL_GRID_SIZE + self.level - 1
         lifetime = INITIAL_LIFETIME * (LIFETIME_FACTOR ** (self.level - 1))
+        twisted_level = self._is_twisted_level()
+        if twisted_level:
+            lifetime *= 1.15
 
         self._show_level_briefing(grid_size, lifetime)
 
@@ -246,6 +263,7 @@ class FrogJumpGame:
                 lifetime,
                 self.current_level_points,
                 elapsed_seconds,
+                twisted_level,
             )
             self.clock.tick(MAX_FPS)
 
@@ -291,17 +309,24 @@ class FrogJumpGame:
             pygame.K_RIGHT: (1, 0),
             pygame.K_d: (1, 0),
         }
-        return mapping.get(key)
+        direction = mapping.get(key)
+        if direction and self._is_twisted_level():
+            return (-direction[0], -direction[1])
+        return direction
 
     def _direction_from_drag(self, dx: int, dy: int) -> Optional[Tuple[int, int]]:
         """Berechnet aus einer Drag-Bewegung die Sprungrichtung."""
 
+        direction: Optional[Tuple[int, int]] = None
         if abs(dx) > abs(dy):
-            return (1, 0) if dx > 0 else (-1, 0)
-        if abs(dy) > 0:
+            direction = (1, 0) if dx > 0 else (-1, 0)
+        elif abs(dy) > 0:
             # Bildschirm y wächst nach unten, daher Vorzeichen invertieren
-            return (0, 1) if dy < 0 else (0, -1)
-        return None
+            direction = (0, 1) if dy < 0 else (0, -1)
+
+        if direction and self._is_twisted_level():
+            direction = (-direction[0], -direction[1])
+        return direction
 
     def _try_move(self, frog_position: List[int], direction: Tuple[int, int], grid_size: int) -> None:
         """Bewegt den Frosch, sofern das Ziel innerhalb des Spielfelds liegt."""
@@ -349,7 +374,11 @@ class FrogJumpGame:
         max_radius = cell_size * 0.48
         radius = min(cell_size * factor, max_radius)
         has_diamond = random.random() < DIAMOND_SPAWN_PROBABILITY
-        return Leaf(creation_ticks, lifetime, radius, has_diamond)
+        lifetime_factor = random.uniform(
+            1.0 - LEAF_LIFETIME_VARIATION, 1.0 + LEAF_LIFETIME_VARIATION
+        )
+        adjusted_lifetime = max(0.1, lifetime * lifetime_factor)
+        return Leaf(creation_ticks, adjusted_lifetime, radius, has_diamond)
 
     def _update_leaves(
         self,
@@ -472,6 +501,7 @@ class FrogJumpGame:
         lifetime: float,
         level_points: float,
         elapsed_seconds: float,
+        twisted_level: bool,
     ) -> None:
         """Zeichnet Spielfeld, Frosch, HUD und Instruktionen."""
 
@@ -511,7 +541,7 @@ class FrogJumpGame:
                 -frog_rect.width * (1.0 - FROG_SCALE),
                 -frog_rect.height * (1.0 - FROG_SCALE),
             )
-        self._draw_frog(frog_rect)
+        self._draw_frog(frog_rect, twisted_level)
 
         self._draw_hud(grid_size, lifetime, level_points, elapsed_seconds)
         self._draw_instructions()
@@ -748,7 +778,7 @@ class FrogJumpGame:
             int(start + (end - start) * clamped) for start, end in zip(start_color, end_color)
         )
 
-    def _draw_frog(self, cell_rect: pygame.Rect) -> None:
+    def _draw_frog(self, cell_rect: pygame.Rect, twisted: bool = False) -> None:
         """Zeichnet einen stilisierten Frosch innerhalb der gegebenen Zelle."""
 
         body_rect = cell_rect.inflate(-cell_rect.width * 0.25, -cell_rect.height * 0.3)
@@ -759,9 +789,36 @@ class FrogJumpGame:
         )
         belly_rect = body_rect.inflate(-body_rect.width * 0.45, -body_rect.height * 0.35)
 
-        pygame.draw.ellipse(self.screen, FROG_BODY_COLOR, body_rect)
-        pygame.draw.ellipse(self.screen, FROG_BODY_COLOR, head_rect)
-        pygame.draw.ellipse(self.screen, FROG_BELLY_COLOR, belly_rect)
+        body_color = TWISTED_FROG_BODY_COLOR if twisted else FROG_BODY_COLOR
+        limb_color = TWISTED_FROG_LIMB_COLOR if twisted else FROG_LIMB_COLOR
+        belly_color = TWISTED_FROG_BELLY_COLOR if twisted else FROG_BELLY_COLOR
+        eye_color = TWISTED_FROG_EYE_COLOR if twisted else FROG_EYE_COLOR
+        pupil_color = TWISTED_FROG_PUPIL_COLOR if twisted else FROG_PUPIL_COLOR
+
+        pygame.draw.ellipse(self.screen, body_color, body_rect)
+        pygame.draw.ellipse(self.screen, body_color, head_rect)
+        pygame.draw.ellipse(self.screen, belly_color, belly_rect)
+
+        if twisted:
+            horn_height = max(2, int(head_rect.height * 0.7))
+            horn_width = max(2, int(head_rect.width * 0.25))
+            horn_offset_x = int(head_rect.width * 0.22)
+            base_y = head_rect.top + int(head_rect.height * 0.15)
+            top_y = head_rect.top - horn_height
+            left_base_x = head_rect.centerx - horn_offset_x
+            right_base_x = head_rect.centerx + horn_offset_x
+            left_points = [
+                (left_base_x - horn_width // 2, base_y),
+                (left_base_x + horn_width // 2, base_y),
+                (left_base_x, top_y),
+            ]
+            right_points = [
+                (right_base_x - horn_width // 2, base_y),
+                (right_base_x + horn_width // 2, base_y),
+                (right_base_x, top_y),
+            ]
+            pygame.draw.polygon(self.screen, TWISTED_FROG_HORN_COLOR, left_points)
+            pygame.draw.polygon(self.screen, TWISTED_FROG_HORN_COLOR, right_points)
 
         leg_width = max(2, int(cell_rect.width * 0.1))
         leg_length = int(cell_rect.height * 0.35)
@@ -769,28 +826,28 @@ class FrogJumpGame:
         front_leg_y = int(cell_rect.centery + cell_rect.height * 0.15)
         pygame.draw.line(
             self.screen,
-            FROG_LIMB_COLOR,
+            limb_color,
             (int(cell_rect.centerx - cell_rect.width * 0.25), front_leg_y),
             (int(cell_rect.centerx - cell_rect.width * 0.35), front_leg_y + leg_length // 2),
             leg_width,
         )
         pygame.draw.line(
             self.screen,
-            FROG_LIMB_COLOR,
+            limb_color,
             (int(cell_rect.centerx + cell_rect.width * 0.25), front_leg_y),
             (int(cell_rect.centerx + cell_rect.width * 0.35), front_leg_y + leg_length // 2),
             leg_width,
         )
         pygame.draw.line(
             self.screen,
-            FROG_LIMB_COLOR,
+            limb_color,
             (int(cell_rect.centerx - cell_rect.width * 0.35), back_leg_y),
             (int(cell_rect.centerx - cell_rect.width * 0.2), back_leg_y + leg_length // 3),
             leg_width,
         )
         pygame.draw.line(
             self.screen,
-            FROG_LIMB_COLOR,
+            limb_color,
             (int(cell_rect.centerx + cell_rect.width * 0.35), back_leg_y),
             (int(cell_rect.centerx + cell_rect.width * 0.2), back_leg_y + leg_length // 3),
             leg_width,
@@ -801,18 +858,18 @@ class FrogJumpGame:
         eye_offset_y = int(cell_rect.height * 0.33)
         left_eye_center = (cell_rect.centerx - eye_offset_x, cell_rect.centery - eye_offset_y)
         right_eye_center = (cell_rect.centerx + eye_offset_x, cell_rect.centery - eye_offset_y)
-        pygame.draw.circle(self.screen, FROG_EYE_COLOR, left_eye_center, eye_radius)
-        pygame.draw.circle(self.screen, FROG_EYE_COLOR, right_eye_center, eye_radius)
+        pygame.draw.circle(self.screen, eye_color, left_eye_center, eye_radius)
+        pygame.draw.circle(self.screen, eye_color, right_eye_center, eye_radius)
 
         pupil_radius = max(1, int(eye_radius * 0.5))
-        pygame.draw.circle(self.screen, FROG_PUPIL_COLOR, left_eye_center, pupil_radius)
-        pygame.draw.circle(self.screen, FROG_PUPIL_COLOR, right_eye_center, pupil_radius)
+        pygame.draw.circle(self.screen, pupil_color, left_eye_center, pupil_radius)
+        pygame.draw.circle(self.screen, pupil_color, right_eye_center, pupil_radius)
 
         mouth_width = int(cell_rect.width * 0.35)
         mouth_y = int(cell_rect.centery - cell_rect.height * 0.02)
         pygame.draw.arc(
             self.screen,
-            FROG_PUPIL_COLOR,
+            pupil_color,
             pygame.Rect(
                 cell_rect.centerx - mouth_width,
                 mouth_y,
